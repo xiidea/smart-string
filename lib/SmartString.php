@@ -15,9 +15,13 @@ class SmartString
         'font_name' => 'arial',
         'font_size' => '7',
         'character_limit' => '100',
+        'line_limit' => '10',
+        'line_width' => '100',
         'word_limit' => '10',
         'width_limit' => '100',
         'end' => '&hellip;',
+        'trim_word' => false,
+        'new_line' => '<br>',
     );
 
     public function __construct($initial_value = "", $config = array())
@@ -81,9 +85,37 @@ class SmartString
         return html_entity_decode(trim(preg_replace("/\s+/", ' ', $text)));
     }
 
-    public function limitWords($limit = null)
+    private function reCalculateLimit($str = null, $limit = null){
+
+        if ($str === null) {
+            $str = $this->string;
+        }
+
+        if ($str == '') {
+            return $limit;
+        }
+
+        if ($limit == null) {
+            $limit = $this->config['character_limit'];
+        }
+
+        $strlen = $this->fn_strlen;
+        $substr = $this->fn_substr;
+
+        $str = $substr($str, 0 , $limit);
+
+        $wide = $strlen(preg_replace('/[^A-Z0-9_@#%$&]/', '', $str));
+
+        return round($limit - $wide * 0.2);
+    }
+
+    public function limitWords($limit = null, $str = null)
     {
-        if ($this->string == '') {
+        if ($str === null) {
+            $str = $this->string;
+        }
+
+        if ($str == '') {
             return "";
         }
 
@@ -95,22 +127,26 @@ class SmartString
 
         $end_char = $this->config['end'];
 
-        preg_match('/^\s*+(?:\S++\s*+){1,' . (int)$limit . '}/', $this->string, $matches);
+        preg_match('/^\s*+(?:\S++\s*+){1,' . (int)$limit . '}/', $str, $matches);
 
-        if ($strlen($this->string) == $strlen($matches[0])) {
+        if ($strlen($str) == $strlen($matches[0])) {
             $end_char = '';
         }
 
         return rtrim($matches[0]) . $end_char;
     }
 
-    public function limitCharacters($limit = null)
+    public function limitCharacters($limit = null, $str = null, $ellipsis = true)
     {
-        if ($limit == null) {
+        if ($limit === null) {
             $limit = $this->config['character_limit'];
         }
 
-        $str = $this->string;
+        if ($str === null) {
+            $str = $this->string;
+        }
+
+        $limit = $this->reCalculateLimit($str, $limit);
 
         $strlen = $this->fn_strlen;
         $substr = $this->fn_substr;
@@ -119,11 +155,12 @@ class SmartString
             return $str;
         }
 
-        $end_char = $this->config['end'];
+        $end_char = $ellipsis ? $this->config['end'] : "";
+        $dummyEnd = html_entity_decode($end_char);
 
         $out = "";
         foreach (explode(' ', trim($str)) as $val) {
-            if ($strlen("{$out} {$val}") > $limit) //We are going to exceeded limit!
+            if ($strlen("{$out} {$val}{$dummyEnd}") > $limit) //We are going to exceeded limit!
             {
                 $out = trim($out);
                 //what if a crazy user put a long word to test you out!! do not disappoint him
@@ -135,7 +172,7 @@ class SmartString
 
             $out .= $val . ' ';
         }
-        return ($strlen($out) == $strlen($str)) ? $out : $out . $end_char;
+        return $out . $end_char;
 
     }
 
@@ -154,11 +191,83 @@ class SmartString
         return $bounding_box[2];
     }
 
-    public function limitWidth($width = null)
+    public function limitWidth($width = null, $text = null)
     {
-        if ($width == null) {
+        if($this->config['trim_word']){
+            return $this->limitWidthBreakWord($width, $text);
+        }else{
+            return $this->limitWidthFullWord($width, $text);
+        }
+    }
+
+    public function limitLine($lines = null, $text = null, $lineWidth = null)
+    {
+        if ($lines === null) {
+            $lines = $this->config['line_limit'];
+        }
+
+        if ($text === null) {
+            $text = $this->string;
+        }
+
+        if ($lineWidth === null) {
+            $lineWidth = $this->config['line_width'];
+        }
+
+        $strlen = $this->fn_strlen;
+        $substr = $this->fn_substr;
+
+        $result = '';
+        $spaces_added = 0;
+        $next_start = 0;
+
+        // Divide up the string into lines
+        for ($i=0;$i<$lines;$i++) {
+            if (! $next_start) {
+                $start = $i * $lineWidth;
+            } else {
+                $start = $next_start;
+            }
+
+            $line = $substr($text, $start, $lineWidth + 1);
+
+            // Truncate the line by the appropriate length
+            $old_line = $line;
+
+            $line = $this->limitCharacters($lineWidth, $line, ($lines == $i+1));
+
+            $limitTemp = $strlen($line);
+
+            $next_start = $start + $limitTemp + 1;
+
+            // If there are no line breaks in this line at all
+            if ($strlen($line) < $strlen($text) and ! strstr($line, ' ')) {
+                // Add a space to it, keep track of how many spaces are added
+                $line .= ' ';
+                $spaces_added ++;
+            }
+            $result .= $line;
+            if($lines !== $i+1){
+                $result .= $this->config['new_line'];
+            }
+        }
+
+        return $result;
+    }
+
+    private function limitWidthBreakWord($width = null, $text = null)
+    {
+        if ($width === null) {
             $width = $this->config['width_limit'];
         }
+
+        if ($text === null) {
+            $text = $this->string;
+        }
+
+        $single_character_width = $this->getWidth('W');
+
+        $startIndex = floor($width / $single_character_width);
 
         $append_string = $this->clean($this->config['end']);
         $append_string_width = $this->getWidth($append_string);
@@ -166,10 +275,9 @@ class SmartString
         $strlen = $this->fn_strlen;
         $substr = $this->fn_substr;
 
-        $text = $this->string;
         $str_len = $strlen($text);
 
-        for ($i = 0; $i <= $str_len; $i++) {
+        for ($i = $startIndex; $i <= $str_len; $i++) {
             $trimmed_text = $substr($text, 0, $i);
             $trimmed_text_width = $this->getWidth($trimmed_text);
             if ($trimmed_text_width + $append_string_width > $width && $i > 0) {
@@ -180,7 +288,47 @@ class SmartString
                 return $str_to_return;
             }
         }
+
         return $text;
+    }
+
+    private function limitWidthFullWord($width = null, $text = null)
+    {
+        if ($width == null) {
+            $width = $this->config['width_limit'];
+        }
+
+        if ($text === null) {
+            $text = $this->string;
+        }
+
+        $append_string = $this->clean($this->config['end']);
+        $append_string_width = $this->getWidth(html_entity_decode($append_string));
+
+        $fullWidth = $this->getWidth();
+
+        if($fullWidth < $width){
+            return $text;
+        }
+
+        $out = "";
+        foreach (explode(' ', $text) as $val) {
+            $newWidth = $this->getWidth("{$out} {$val}") + $append_string_width;
+            if ($newWidth > $width) //We are going to exceeded limit!
+            {
+                $out = trim($out);
+                //what if a crazy user put a long word to test you out!! do not disappoint him
+                if ($out == "" && $text != "") {
+                    return $this->limitWidth();
+                }
+
+                return ($text == $out) ? $out : $out . $append_string;
+            }
+
+            $out .= $val . ' ';
+        }
+
+        return ($text == $out) ? $out : $out . $append_string;
     }
 
     public function limit($limit = null, $type = null)
@@ -193,6 +341,7 @@ class SmartString
             case 'Words':
             case 'Characters':
             case 'Width':
+            case 'Line':
                 $function = "limit{$this->type}";
                 break;
             default:
@@ -206,7 +355,10 @@ class SmartString
     {
         $this->font_file = false;
 
-        $font_base_dir = realpath($this->config['font_dir']);
+         $font_base_dir = $this->config['font_dir'] == 'fonts' ?
+                                                    dirname(__FILE__). DIRECTORY_SEPARATOR ."fonts"
+                                                    : realpath($this->config['font_dir']);
+
         $font_file = $font_base_dir . DIRECTORY_SEPARATOR . $this->config['font_name'] . ".ttf";
 
         if (file_exists($font_file)) {
